@@ -1,13 +1,12 @@
-use crate::error::{NetavarkError, NetavarkResult};
+use crate::error::{NetavarkResult};
 use crate::network::internal_types::{
     PortForwardConfig, SetupNetwork, TearDownNetwork, TeardownPortForward,
 };
 use log::{debug, info};
-use std::env;
-use zbus::blocking::Connection;
 
 pub mod firewalld;
 pub mod iptables;
+pub mod fwnone;
 mod varktables;
 
 /// Firewall drivers have the ability to set up per-network firewall forwarding
@@ -26,60 +25,14 @@ pub trait FirewallDriver {
 
 /// Types of firewall backend
 enum FirewallImpl {
-    Iptables,
-    Firewalld(Connection),
-    Nftables,
+    Fwnone,
 }
 
 /// What firewall implementations does this system support?
 fn get_firewall_impl() -> NetavarkResult<FirewallImpl> {
-    // First, check the NETAVARK_FW env var.
-    // It respects "firewalld", "iptables", "nftables".
-    if let Ok(var) = env::var("NETAVARK_FW") {
-        debug!("Forcibly using firewall driver {}", var);
-        match var.to_lowercase().as_str() {
-            "firewalld" => {
-                let conn = match Connection::system() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return Err(NetavarkError::wrap(
-                            "Error retrieving dbus connection for requested firewall backend",
-                            e.into(),
-                        ))
-                    }
-                };
-                return Ok(FirewallImpl::Firewalld(conn));
-            }
-            "iptables" => return Ok(FirewallImpl::Iptables),
-            "nftables" => return Ok(FirewallImpl::Nftables),
-            any => {
-                return Err(NetavarkError::Message(format!(
-                    "Must provide a valid firewall backend, got {}",
-                    any
-                )))
-            }
-        }
-    }
-
-    // Until firewalld 1.1.0 with support for self-port forwarding lands:
-    // Just use iptables
-    Ok(FirewallImpl::Iptables)
-
-    // Is firewalld running?
-    // let conn = match Connection::system() {
-    //     Ok(conn) => conn,
-    //     Err(_) => return FirewallImpl::Iptables,
-    // };
-    // match conn.call_method(
-    //     Some("org.freedesktop.DBus"),
-    //     "/org/freedesktop/DBus",
-    //     Some("org.freedesktop.DBus"),
-    //     "GetNameOwner",
-    //     &"org.fedoraproject.FirewallD1",
-    // ) {
-    //     Ok(_) => FirewallImpl::Firewalld(conn),
-    //     Err(_) => FirewallImpl::Iptables,
-    // }
+    // Forcibly disable firewall features
+    debug!("Firewall is forcibly disabled");
+    return Ok(FirewallImpl::Fwnone);
 }
 
 /// Get the preferred firewall implementation for the current system
@@ -87,20 +40,10 @@ fn get_firewall_impl() -> NetavarkResult<FirewallImpl> {
 pub fn get_supported_firewall_driver() -> NetavarkResult<Box<dyn FirewallDriver>> {
     match get_firewall_impl() {
         Ok(fw) => match fw {
-            FirewallImpl::Iptables => {
-                info!("Using iptables firewall driver");
-                iptables::new()
-            }
-            FirewallImpl::Firewalld(conn) => {
-                info!("Using firewalld firewall driver");
-                firewalld::new(conn)
-            }
-            FirewallImpl::Nftables => {
-                info!("Using nftables firewall driver");
-                Err(NetavarkError::msg(
-                    "nftables support presently not available",
-                ))
-            }
+            FirewallImpl::Fwnone => {
+                info!("Not using firewall");
+                fwnone::new()
+            },
         },
         Err(e) => Err(e),
     }
